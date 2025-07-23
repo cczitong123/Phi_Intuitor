@@ -55,6 +55,13 @@ from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
 
+#新增
+from scipy.special import softmax
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+from transformers import AutoTokenizer
+from torch.nn.utils.rnn import pad_sequence
+
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
@@ -183,6 +190,7 @@ class vLLMRollout(BaseRollout):
             **lora_kwargs,
             **engine_kwargs,
         )
+        self.tokenizer = tokenizer or AutoTokenizer.from_pretrained(config.model.path)#加入tokenizer
 
         # Offload vllm model to reduce peak memory usage
         if config.free_cache_engine:
@@ -255,22 +263,7 @@ class vLLMRollout(BaseRollout):
 
         batch_size = idx.size(0)
 
-        non_tensor_batch = prompts.non_tensor_batch
-        if "raw_prompt_ids" not in non_tensor_batch:
-            non_tensor_batch["raw_prompt_ids"] = np.array(
-                [_pre_process_inputs(self.pad_token_id, idx[i]) for i in range(batch_size)], dtype=object
-            )
-
-        if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
-            raise RuntimeError("vllm sharding manager is not work properly.")
-
-        if "multi_modal_data" in non_tensor_batch:
-            vllm_inputs = []
-            for raw_prompt_ids, multi_modal_data in zip(
-                non_tensor_batch.pop("raw_prompt_ids"), non_tensor_batch.pop("multi_modal_data")
-            ):
-                vllm_inputs.append({"prompt_token_ids": raw_prompt_ids, "multi_modal_data": multi_modal_data})
-        else:
+    
             vllm_inputs = [
                 {"prompt_token_ids": raw_prompt_ids} for raw_prompt_ids in non_tensor_batch.pop("raw_prompt_ids")
             ]
@@ -286,7 +279,22 @@ class vLLMRollout(BaseRollout):
                 )
 
         do_sample = prompts.meta_info.get("do_sample", True)
-        is_validate = prompts.meta_info.get("validate", False)
+        is_validate = prompts.meta_info.get("validate", #     non_tensor_batch = prompts.non_tensor_batch
+        if "raw_prompt_ids" not in non_tensor_batch:
+            non_tensor_batch["raw_prompt_ids"] = np.array(
+                [_pre_process_inputs(self.pad_token_id, idx[i]) for i in range(batch_size)], dtype=object
+            )
+
+        if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
+            raise RuntimeError("vllm sharding manager is not work properly.")
+
+        if "multi_modal_data" in non_tensor_batch:
+            vllm_inputs = []
+            for raw_prompt_ids, multi_modal_data in zip(
+                non_tensor_batch.pop("raw_prompt_ids"), non_tensor_batch.pop("multi_modal_data")
+            ):
+                vllm_inputs.append({"prompt_token_ids": raw_prompt_ids, "multi_modal_data": multi_modal_data})
+        else:False)
         if not do_sample:
             kwargs = {
                 "best_of": 1,
@@ -382,6 +390,344 @@ class vLLMRollout(BaseRollout):
             batch["rollout_log_probs"] = rollout_log_probs
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+
+    #rollout 成功版，使用 combined_weights
+
+    # @torch.no_grad()
+    # def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
+    #     """
+    #     多步 Phi-Decoding，batch 维度并行版
+    #     """
+    #     # —— 0. 原版 non_tensor_batch 处理 —— 
+    #     non_tensor_batch = prompts.non_tensor_batch
+    #     idx0 = prompts.batch["input_ids"]    # 用于生成 raw_prompt_ids 的基础
+    #     bs0 = idx0.size(0)
+    #     if "raw_prompt_ids" not in non_tensor_batch:
+    #         non_tensor_batch["raw_prompt_ids"] = np.array(
+    #             [_pre_process_inputs(self.pad_token_id, idx0[i]) for i in range(bs0)],
+    #             dtype=object
+    #         )
+    #     if bs0 != len(non_tensor_batch["raw_prompt_ids"]):
+    #         raise RuntimeError("vllm sharding manager is not work properly.")
+
+    #     if "multi_modal_data" in non_tensor_batch:
+    #         multi_modal_data = non_tensor_batch.pop("multi_modal_data")
+    #         raw_prompt_ids   = non_tensor_batch.pop("raw_prompt_ids")
+    #         vllm_inputs = [
+    #             {"prompt_token_ids": r, "multi_modal_data": m}
+    #             for r, m in zip(raw_prompt_ids, multi_modal_data)
+    #         ]
+    #     else:
+    #         raw_prompt_ids = non_tensor_batch.pop("raw_prompt_ids")
+    #         vllm_inputs    = [{"prompt_token_ids": r} for r in raw_prompt_ids]
+
+    #     # —— 1. 超参数 —— 
+    #     beam_size         = int(kwargs.get("step_beam_size",   self.config.step_beam_size))
+    #     num_rollout       = int(kwargs.get("num_rollout",      self.config.num_rollout))
+    #     num_foresight     = int(kwargs.get("num_foresight",    self.config.num_foresight))
+    #     sigma_rate        = float(kwargs.get("sigma_rate",     self.config.sigma_rate))
+    #     temperature       = float(kwargs.get("temperature",    self.config.temperature))
+    #     step_response_len = int(kwargs.get("step_response_length", self.config.step_response_length))
+    #     response_len      = int(kwargs.get("response_length",  self.config.response_length))
+
+    #     #system_prompt = DEFAULT_SYSTEM_PROMPT
+
+    #     # —— 2. 解码 raw prompts ——  
+    #     idx         = prompts.batch["input_ids"]  # [bs, Lp]
+    #     device      = idx.device
+    #     bs          = idx.size(0)
+    #     # 使用 raw_prompt_ids 解码文本
+    #     raw_prompts    = self.tokenizer.batch_decode(idx, skip_special_tokens=True)
+
+    #     # —— 3. SamplingParams for intermediate rollout ——  
+    #     base_sp = SamplingParams(
+    #         max_tokens=step_response_len,
+    #         logprobs=1,
+    #         temperature=temperature,
+    #         n=num_rollout,
+    #         stop=["\n", "<end_of_reasoning>"]
+    #     )
+
+    #     # —— 初始化 history/weight/log_probs ——  
+    #     prev_steps      = [[""   for _ in range(beam_size)] for _ in range(bs)]
+    #     prev_values     = [[0.0  for _ in range(beam_size)] for _ in range(bs)]
+    #     weights_history = [[[]   for _ in range(beam_size)] for _ in range(bs)]
+    #     rollout_log_probs = []  # <--- 初始化 rollout_log_probs
+
+    #     # —— 4. 多步前瞻 (num_foresight) ——  
+    #     for depth in range(num_foresight):
+    #         all_inputs = []
+    #         for b in range(bs):
+    #             for k in range(beam_size):
+    #                 prefix = (
+    #                     f"User: {raw_prompts[b].strip()}\n"
+    #                     f"Reasoning so far:\n{prev_steps[b][k]}"
+    #                 )
+    #                 all_inputs.append(prefix)
+    #         prompt_ids = [
+    #             self.inference_engine.llm_engine.tokenizer.encode(t, add_special_tokens=False)
+    #             for t in all_inputs
+    #         ]
+
+    #         outs = self.inference_engine.generate(
+    #             prompts=None,
+    #             sampling_params=base_sp,
+    #             prompt_token_ids=prompt_ids,
+    #             use_tqdm=False
+    #         )
+
+    #         all_resp, all_lp = [], []
+    #         for out in outs:
+    #             for o in out.outputs:
+    #                 txt = o.text.strip()
+    #                 lp  = o.cumulative_logprob / (len(o.token_ids) + 1e-8)
+    #                 all_resp.append(txt)
+    #                 all_lp.append(lp)
+
+    #         # 收集中间 log_probs
+    #         rollout_log_probs.append(all_lp.copy())  # <--- 记录这一轮的 log_probs
+
+    #         all_adv = []
+    #         for b in range(bs):
+    #             for k in range(beam_size):
+    #                 base_idx = (b * beam_size + k) * num_rollout
+    #                 prev_v   = prev_values[b][k]
+    #                 for j in range(num_rollout):
+    #                     all_adv.append(all_lp[base_idx + j] - prev_v)
+
+    #         new_steps = [["" for _ in range(beam_size)] for _ in range(bs)]
+    #         new_values = [[0.0 for _ in range(beam_size)] for _ in range(bs)]
+    #         new_weights = [[[]  for _ in range(beam_size)] for _ in range(bs)]
+
+    #         for b in range(bs):
+    #             start = b * beam_size * num_rollout
+    #             end   = start + beam_size * num_rollout
+    #             resp_slice = all_resp[start:end]
+    #             lp_slice   = all_lp[start:end]
+    #             adv_slice  = np.array(all_adv[start:end])
+
+    #             mu, sigma = np.mean(lp_slice), np.std(lp_slice)
+    #             keep = [i for i,v in enumerate(lp_slice) if v > mu - sigma_rate * sigma]
+    #             if len(keep) < beam_size:
+    #                 wts = np.exp(adv_slice / temperature)
+    #                 wts /= wts.sum()
+    #                 extra = np.random.choice(
+    #                     len(adv_slice),
+    #                     beam_size - len(keep),
+    #                     replace=False,
+    #                     p=wts
+    #                 ).tolist()
+    #                 keep += extra
+    #             keep.sort()
+
+    #             adv_k = adv_slice[keep]
+    #             combined_weights = softmax(adv_k / temperature)
+
+    #             sel_idxs = np.random.choice(
+    #                 len(keep), size=beam_size, replace=False, p=combined_weights
+    #             ).tolist()
+    #             picked = [keep[i] for i in sel_idxs]
+
+    #             for k, sel in enumerate(picked):
+    #                 origin_beam = sel // num_rollout
+    #                 resp_text = resp_slice[sel]
+    #                 raw_adv = float(adv_slice[sel])
+    #                 token_ids = self.inference_engine.llm_engine.tokenizer.encode(resp_text, add_special_tokens=False)
+    #                 rep_adv = [raw_adv] * len(token_ids)
+
+    #                 new_weights[b][k] = weights_history[b][origin_beam] + rep_adv
+    #                 new_steps[b][k]   = prev_steps[b][origin_beam] + resp_text + "\n"
+    #                 new_values[b][k]  = lp_slice[sel]
+
+    #         prev_steps, prev_values, weights_history = new_steps, new_values, new_weights
+    #     #print(f"prev_steps: {prev_steps}")###check prev_steps
+
+    #     # —— 6. 最后一轮并行生成最终答案 ——(argmax)
+    #     final_prompts = []
+    #     history_list  = []
+    #     final_rewards = []
+    #     final_probs   = []
+    #     for b in range(bs):
+    #         # # 选择最大的 prev_value 对应的 beam
+    #         # best_k = int(np.argmax(prev_values[b]))
+    #         # —— 基于 prev_values 重新计算增益权重（adv）并做 softmax 采样 —— 
+    #         vals = np.array(prev_values[b])                     # shape: [beam_size]
+    #         adv  = vals - vals.mean()                           # centered advantage
+    #         beam_p = np.exp(adv / temperature)
+    #         beam_p /= beam_p.sum()                                # 归一化概率
+    #         best_k = int(np.random.choice(len(beam_p), p=beam_p))  # 按概率采样一个 beam
+    #         p = float(beam_p[best_k])   # 把选中那条 beam 的概率取出来
+    #         #新adv####
+    #         adv_all = vals - vals.mean()####
+    #         raw_adv_final = float(adv_all[best_k])####
+
+    #         history = prev_steps[b][best_k]
+    #         base_ws   = weights_history[b][best_k]
+    #         txt = (
+    #             #f"{system_prompt}\n\n"
+    #             f"User: {raw_prompts[b].strip()}\n"
+    #             f"Reasoning so far:\n{prev_steps[b][best_k]}\n"
+    #             #f"Final step: Continue the reasoning above—include **all** intermediate steps—and write out the full reasoning process, "
+    #             #f"Final step: ending with the answer in the format \\boxed{{…}} and finish the reasoning with <end_of_reasoning>."
+    #         )
+    #         #print(f"raw_prompts[{b}]:{raw_prompts[b]}")###check raw_prompts
+    #         #print(f"prev_steps[{b}]:{prev_steps[b][best_k]}")###check prev_steps
+    #         #print(f"final_prompt[{b}]:{txt}")###check final_prompt
+    #         ids = self.tokenizer.encode(txt, add_special_tokens=False)
+    #         # 重复 n 次，保证 final_prompts 和 history_list 都是 bs * n 长度
+    #         #for _ in range(self.config.n):
+    #         final_prompts.append(ids)
+    #         history_list.append(history)
+    #         final_rewards.append(list(base_ws))
+    #             #final_probs.append(p)  # 保存选中 beam 的概率
+    #         final_probs.append(raw_adv_final)####adv版
+
+    #     final_sp = SamplingParams(
+    #         max_tokens = response_len,
+    #         logprobs   = 1,
+    #         temperature= temperature,
+    #         n          = 1,
+    #         stop       = ["<end_of_reasoning>"]
+    #     )
+    #     final_outs = self.inference_engine.generate(
+    #         prompts=None,
+    #         sampling_params=final_sp,
+    #         prompt_token_ids=final_prompts,
+    #         use_tqdm=False
+    #     )
+
+        
+    #     full_texts = []
+    #     final_rewards_padded = []
+    #     for i, (history, out) in enumerate(zip(history_list, final_outs)):
+    #         gen_text = out.outputs[0].text.strip()
+    #         full_texts.append(history + gen_text)
+    #         token_ids = self.tokenizer.encode(gen_text, add_special_tokens=False)
+    #         #final_rewards_padded.append(final_rewards[i] + [1.0] * len(token_ids))
+    #         prob = final_probs[i]
+    #         final_rewards_padded.append(final_rewards[i] + [prob] * len(token_ids))
+
+    #     # encode & pad responses
+    #     full_resp_ids = [self.tokenizer.encode(t, add_special_tokens=False) for t in full_texts]
+    #     #full_resp_ids = [ids[:response_len] for ids in full_resp_ids]#截断到 response_len
+    #     resp_padded = pad_2d_list_to_length(
+    #         full_resp_ids,
+    #         self.tokenizer.pad_token_id,
+    #         max_length=response_len
+    #     ).to(device)
+
+    #     # # —— 8. 构建 prm_reward 张量 ——
+    #     # 使得 prm_reward 的每行长度与 resp_padded 的响应长度一致 (response_len)
+    #     pr_tensors = []
+    #     for r in final_rewards_padded:
+    #         # 截断或补齐到 response_len
+    #         if len(r) >= response_len:
+    #             row = r[:response_len]
+    #         else:
+    #             row = r + [0.0] * (response_len - len(r))
+    #         pr_tensors.append(row)
+    #     prm_reward = torch.tensor(pr_tensors, device=device)
+    #     ####neu reward 这样计算导致reward过小
+    #     # # 按公式算权重：w_i = exp(-r_i/T) / sum_j exp(-r_j/T)
+    #     # r = prm_reward
+    #     # T = temperature 
+    #     # exp_neg = torch.exp(-r / T)           # [Bn, L]
+    #     # den = exp_neg.sum(dim=1, keepdim=True)  # [Bn, 1]
+    #     # w = exp_neg / den                       # [Bn, L]
+
+    #     # # 4) 最终 r*_i = w_i * r_i
+    #     # r_star = w * r                          # [Bn, L]
+
+    #     # # 5) 用 r_star 作为 prm_reward
+    #     # prm_reward = r_star
+
+    #     # —— 9. repeat 原 prompt tensors & 拼 batch —— repeat 原 prompt tensors & 拼 batch ——
+    #     Bn = resp_padded.size(0)
+    #     repeat = Bn // bs
+    #     idx    = prompts.batch["input_ids"]#.repeat_interleave(repeat, dim=0)
+    #     mask   = prompts.batch["attention_mask"]#.repeat_interleave(repeat, dim=0)
+    #     pos    = prompts.batch["position_ids"]#.repeat_interleave(repeat, dim=0)
+    #     seq    = torch.cat([idx, resp_padded], dim=1)
+    #     delta  = torch.arange(1, response_len+1, device=device).unsqueeze(0).expand(Bn, -1)
+    #     last_p = pos[:, -1:].expand(-1, response_len)
+    #     pos    = torch.cat([pos, last_p+delta], dim=1)
+    #     attn   = get_response_mask(resp_padded, self.tokenizer.eos_token_id, mask.dtype)
+    #     mask   = torch.cat([mask, attn], dim=1)
+
+    #     batch = TensorDict({
+    #         "prompts":        idx,
+    #         "responses":      resp_padded,
+    #         "input_ids":      seq,
+    #         "attention_mask": mask,
+    #         "position_ids":   pos,
+    #         #"prm_reward":     prm_reward,
+    #     }, batch_size=Bn)
+    #     print(f"[DEBUG] batch['prompts'].shape: {batch['prompts'].shape}")####check prompts shape
+    #     print(f"[DEBUG] batch['responses'].shape: {batch['responses'].shape}")####check responses shape
+    #     print(f"[DEBUG] batch['input_ids'].shape: {batch['input_ids'].shape}")####check input_ids shape
+    #     print(f"[DEBUG] batch['attention_mask'].shape: {batch['attention_mask'].shape}")####check attention_mask shape
+    #     print(f"[DEBUG] batch['position_ids'].shape: {batch['position_ids'].shape}")####check position_ids shape
+    #     print(f"[DEBUG] prm_reward.shape: {prm_reward.shape}")
+
+    #     # print(f"[DEBUG] resp_padded.shape: {resp_padded.shape}")####check resp_padded shape
+    #     # print(f"[DEBUG] prm_reward.shape: {prm_reward.shape}")####check prm_reward shape
+    #     # print(f"[DEBUG] prm_reward[0]: {prm_reward[0]}")####check prm_reward[0]
+    #     # with open("prm_reward3_0.txt", "w", encoding="utf-8") as f:
+    #     #     f.write(str(prm_reward[0].tolist()))
+    #     # # 将第一个样本的 response 文本保存到文件
+    #     # first_resp_ids = resp_padded[0].tolist()
+    #     # #print(f"[DEBUG] first_resp_ids: {first_resp_ids}")####check first_resp_ids
+    #     # first_resp_text = self.tokenizer.decode(first_resp_ids, skip_special_tokens=True)
+    #     # print(f"[DEBUG] first_resp_text: {first_resp_text}")####check first_resp_text
+    #     # with open("first_response3_0.txt", "w", encoding="utf-8") as f:
+    #     #     f.write(first_resp_text)
+    #     # # 可选：打印文件路径以确认
+    #     # print("[DEBUG] Saved prm_reward to prm_reward_0.txt and first response to first_response_0.txt")
+    #     #return DataProto(batch=batch)
+        
+    #     rollout_log_probs = pad_2d_list_to_length(
+    #                 rollout_log_probs, -1, max_length=self.config.response_length
+    #             ).to(idx.device)
+    #     rollout_log_probs = rollout_log_probs.to(torch.float32)
+
+    #     print(f"[DEBUG] rollout_log_probs.shape: {rollout_log_probs.shape}")####check rollout_log_probs shape
+        
+    #     # 展开 rollout_log_probs 至新的 batch_size
+    #         #expanded_rlp = rollout_log_probs.repeat_interleave(repeat, dim=0) 
+    #     #batch["rollout_log_probs"] = rollout_log_probs
+    #     #print(f"[DEBUG] batch keys: {list(batch.keys())}")####check batch keys
+        
+
+    #     # 原来的 non_tensor_batch
+    #     old_ntb = non_tensor_batch
+    #     new_ntb = {}
+
+    #     # 计算重复次数
+    #     repeat = 1 #Bn // bs  # 1024 // 256 = 4
+
+    #     for k, v in old_ntb.items():
+    #         if isinstance(v, list):
+    #             # 普通 Python 列表，直接把整个列表 repeat 次 then flatten
+    #             new_ntb[k] = list(itertools.chain.from_iterable([v] * repeat))
+    #         elif isinstance(v, np.ndarray):
+    #             # numpy 数组，先把第一维 expand，再 reshape
+    #             # 若 v.shape=(bs, ...)，np.repeat 会把第 0 维 repeat 倍
+    #             new_ntb[k] = np.repeat(v, repeat, axis=0)
+    #         elif isinstance(v, torch.Tensor):
+    #             # 如果有 Tensor，也可以用 repeat_interleave
+    #             new_ntb[k] = v.repeat_interleave(repeat, dim=0)
+    #         else:
+    #             # 标量或其他不可重复类型，就简单复制同一个值 repeat 次
+    #             new_ntb[k] = [v] * Bn
+
+    #     # 最终调用 DataProto 时，传入展开后的 non_tensor_batch：
+    #     return DataProto(
+    #         batch=batch,
+    #         non_tensor_batch=new_ntb  
+    #     )
+
+
+    #     #return DataProto(batch=batch,, non_tensor_batch=non_tensor_batch) #
 
 
 # https://github.com/vllm-project/vllm/issues/13175
