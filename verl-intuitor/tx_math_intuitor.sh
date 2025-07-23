@@ -2,10 +2,10 @@
 #SBATCH --job-name=math_intuitor
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=${CPUS_PER_TASK:-32}
-#SBATCH --gres=gpu:${GPUS_PER_NODE:-4}
+#SBATCH --cpus-per-task=32
+#SBATCH --gres=gpu:4
 #SBATCH --partition=accelerated
-#SBATCH --time=${TIME:-24:00:00}
+#SBATCH --time=24:00:00
 #SBATCH --output=/hkfs/work/workspace/scratch/hgf_sap9939-myspace/intuitor/logs/math_intuitor_%j.out
 #SBATCH --error=/hkfs/work/workspace/scratch/hgf_sap9939-myspace/intuitor/logs/math_intuitor_%j.err
 
