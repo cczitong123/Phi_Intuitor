@@ -318,14 +318,32 @@ def split_dict_tensor_into_batches(tensors: TensorDict, batch_size) -> List[Tens
 
 
 def pad_2d_list_to_length(response, pad_token_id, max_length=None):
+    # """
+    # pad a 2D list (e.g. responses, logprobs) to a 2D tensor.
+    # """
+    # response_length = max(len(sub_list) for sub_list in response)
+    # target_length = max_length if max_length is not None and max_length > response_length else response_length
+    # padded_response = [tuple(sub_list) + (pad_token_id,) * (target_length - len(sub_list)) for sub_list in response]
+    # tensor = torch.tensor(padded_response)
+    # return tensor
     """
-    pad a 2D list (e.g. responses, logprobs) to a 2D tensor.
+    pad or truncate a 2D list (e.g. responses, logprobs) to a 2D tensor of width = max_length (if given)
     """
-    response_length = max(len(sub_list) for sub_list in response)
-    target_length = max_length if max_length is not None and max_length > response_length else response_length
-    padded_response = [tuple(sub_list) + (pad_token_id,) * (target_length - len(sub_list)) for sub_list in response]
-    tensor = torch.tensor(padded_response)
-    return tensor
+    # 如果给了 max_length，那么不管当前最长序列有多长，都用它
+    if max_length is not None:
+        target_length = max_length
+    else:
+        # 否则按当前最长序列来
+        target_length = max(len(sub_list) for sub_list in response)
+
+    padded = []
+    for sub in response:
+        # 先截断
+        truncated = sub[:target_length]
+        # 然后 pad
+        padded.append(tuple(truncated) + (pad_token_id,) * (target_length - len(truncated)))
+
+    return torch.tensor(padded)
 
 
 def pad_sequence_to_length(tensors, max_seq_len, pad_token_id, left_pad=False):
