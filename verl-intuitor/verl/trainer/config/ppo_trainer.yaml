@@ -109,18 +109,18 @@ actor_rollout_ref:
     # for huge model, layered summon can save memory (prevent OOM) but make it slower
     layered_summon: False
 
-    # # Phi-Decoding 参数
-    # step_response_length: 512 # for Phi-Decoding, the length of each step response
-    # step_beam_size: 4 
-    # num_foresight: 8 
-    # num_rollout: 4 
-    # width_pruning_strategy: low_sigma
-    # depth_pruning_strategy: cluster
-    # cluster_num: 1
-    # threshold: 0.7
-    # least_foresight_num: 4
-    # sigma_rate: 1.0
-    # seed: 42
+    # Phi-Decoding 参数
+    step_response_length: 512 # for Phi-Decoding, the length of each step response
+    step_beam_size: 4 
+    num_foresight: 8 
+    num_rollout: 4 
+    width_pruning_strategy: low_sigma
+    depth_pruning_strategy: cluster
+    cluster_num: 1
+    threshold: 0.7
+    least_foresight_num: 4
+    sigma_rate: 1.0
+    seed: 42
 
 # custom reward function definition
 custom_reward_function:
