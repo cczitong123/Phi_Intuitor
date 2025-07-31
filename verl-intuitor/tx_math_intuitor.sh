@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --gres=gpu:4
 #SBATCH --partition=accelerated
-#SBATCH --time=6:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=/hkfs/work/workspace/scratch/hgf_sap9939-myspace/intuitor/logs/math_intuitor_%j.out
 #SBATCH --error=/hkfs/work/workspace/scratch/hgf_sap9939-myspace/intuitor/logs/math_intuitor_%j.err
 
@@ -18,7 +18,7 @@ export HYDRA_FULL_ERROR=1
 export PYTHONUNBUFFERED=1
 
 source ~/.bashrc
-conda activate pure
+conda activate verl
 
 # 创建日志和 checkpoint 目录
 mkdir -p /hkfs/work/workspace/scratch/hgf_sap9939-myspace/intuitor/logs

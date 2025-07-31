@@ -1,10 +1,30 @@
+#!/bin/bash
+#SBATCH --job-name=math_grpo
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --gres=gpu:4
+#SBATCH --partition=accelerated
+#SBATCH --time=06:00:00
+#SBATCH --output=/hkfs/work/workspace/scratch/hgf_sap9939-myspace/grpo/logs/math_grpo_%j.out
+#SBATCH --error=/hkfs/work/workspace/scratch/hgf_sap9939-myspace/grpo/logs/math_grpo_%j.err
+
 set -x
 unset ROCR_VISIBLE_DEVICES
+
 export WANDB_API_KEY=7526e35bcef1a5880516f1a32352cd3e6c5a4d8a
 export ACCELERATE_LOG_LEVEL=info
 export HYDRA_FULL_ERROR=1
+export PYTHONUNBUFFERED=1
 
-PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
+source ~/.bashrc
+conda activate verl
+
+# 创建日志和 checkpoint 目录
+mkdir -p /hkfs/work/workspace/scratch/hgf_sap9939-myspace/grpo/logs
+mkdir -p /hkfs/work/workspace/scratch/hgf_sap9939-myspace/grpo/checkpoints
+
+srun python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=$HOME/data/math/train.parquet \
     data.val_files=$HOME/data/math/test.parquet \
@@ -37,11 +57,13 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.val_before_train=False \
-    trainer.n_gpus_per_node=4 \
-    trainer.nnodes=1 \
+    trainer.n_gpus_per_node=${GPUS_PER_NODE:-4} \
+    trainer.nnodes=${NODES:-1} \
     trainer.logger=['console','wandb'] \
     trainer.project_name=verl \
     trainer.experiment_name=math_grpo \
     trainer.save_freq=10 \
     trainer.test_freq=10 \
-    trainer.total_epochs=1 2>&1 | tee verl_math_grpo.log
+    trainer.total_epochs=1 \
+    trainer.default_local_dir=/hkfs/work/workspace/scratch/hgf_sap9939-myspace/grpo/checkpoints \
+    2>&1 | tee /hkfs/work/workspace/scratch/hgf_sap9939-myspace/grpo/logs/verl_math_grpo.log
