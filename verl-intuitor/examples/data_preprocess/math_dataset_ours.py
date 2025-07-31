@@ -47,7 +47,7 @@ if __name__ == "__main__":
     test_dataset = dataset["test"]
 
     instruction_following_0 = "Let's think step by step and output the final answer within \\boxed{}."
-    instruction_following_1 = "You are a helpful AI Assistant, designed to provide well-reasoned and detailed responses. You FIRST think about the reasoning process step by step and then provide the user with the answer. Please enclose your final answer in the box: \\boxed{Your Answer}."
+    instruction_following_1 = "You are a helpful AI Assistant, designed to provide well-reasoned and detailed responses. You FIRST think about the reasoning process step by step and then provide the user with the answer. Please enclose your final answer in the box: \\boxed{Your Answer} and finish the reasoning with <end_of_reasoning>."
     instruction_following_2 = "You are a helpful AI Assistant, designed to provide well-reasoned and detailed responses. You FIRST think about the reasoning process step by step and then provide the user with the answer. Please enclose your final answer in the box: \\boxed{Your Answer}. Please stop generation immediately after outputing the box."
     instruction_following_3 = "You are a helpful AI Assistant, designed to provide well-reasoned and detailed responses. Please provide a step-by-step solution to the following problem."
 
