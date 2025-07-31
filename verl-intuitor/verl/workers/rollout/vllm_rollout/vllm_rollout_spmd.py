@@ -510,7 +510,8 @@ class vLLMRollout(BaseRollout):
                     tok_ids = self.inference_engine.llm_engine.tokenizer.encode(
                         resp, add_special_tokens=False
                     )
-                    rep_adv = [raw_adv] * len(tok_ids)
+                    #rep_adv = [raw_adv] * len(tok_ids)
+                    rep_adv = [raw_adv] + [0.0] * (len(tok_ids)-1)
 
                     new_weights[b][k_idx] = weights_history[b][origin] + rep_adv
                     new_steps[b][k_idx]   = prev_steps[b][origin] + resp + "\n"
@@ -559,10 +560,40 @@ class vLLMRollout(BaseRollout):
             full= history_list[i] + gen
             full_texts.append(full)
             tok_ids = self.tokenizer.encode(gen, add_special_tokens=False)
-            padded_ws.append(final_ws[i] + [final_raw_adv[i]] * len(tok_ids))
+            prob = final_raw_adv[i]
+            segment_reward = [prob] + [0.0] * (len(tok_ids) - 1)
+            #padded_ws.append(final_ws[i] + [final_raw_adv[i]] * len(tok_ids))
+            padded_ws.append(final_ws[i] + segment_reward)
 
         full_ids = [self.tokenizer.encode(t, add_special_tokens=False) for t in full_texts]
         resp_pad= pad_2d_list_to_length(full_ids, self.pad_token_id, response_len).to(idx0.device)
+
+        # —— 8. 构建 prm_reward 张量 ——
+        # 使得 prm_reward 的每行长度与 resp_padded 的响应长度一致 (response_len)
+        pr_tensors = []
+        for r in padded_ws:
+            # 截断或补齐到 response_len
+            if len(r) >= response_len:
+                row = r[:response_len]
+            else:
+                row = r + [0.0] * (response_len - len(r))
+            pr_tensors.append(row)
+        prm_reward = torch.tensor(pr_tensors, device=idx0.device)
+
+        
+        # ####neu reward 这样计算导致reward过小
+        # # 按公式算权重：w_i = exp(-r_i/T) / sum_j exp(-r_j/T)
+        r = prm_reward
+        T = temperature 
+        exp_neg = torch.exp(-r / T)           # [Bn, L]
+        den = exp_neg.sum(dim=1, keepdim=True)  # [Bn, 1]
+        w = exp_neg / den                       # [Bn, L]
+
+        # 4) 最终 r*_i = w_i * r_i
+        r_star = w * r                          # [Bn, L]
+
+        # 5) 用 r_star 作为 prm_reward
+        prm_reward = r_star
 
         # 10. Rebuild batch tensors
         Bn = resp_pad.size(0)
@@ -583,8 +614,12 @@ class vLLMRollout(BaseRollout):
             "input_ids":      seq,
             "attention_mask": mask,
             "position_ids":   pos,
+            "prm_reward":     prm_reward,
         }, batch_size=Bn)
-
+        # Debugging information
+        print(f"[DEBUG] resp_padded.shape: {resp_pad.shape}")####check resp_padded shape
+        print(f"[DEBUG] prm_reward.shape: {prm_reward.shape}")####check prm_reward shape
+        print(f"[DEBUG] prm_reward[0]: {prm_reward[0]}")####check prm_reward[0]
         # 11. Expand non_tensor_batch
         new_ntb = {}
         for k,v in non_tensor_batch.items():
