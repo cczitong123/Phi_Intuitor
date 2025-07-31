@@ -315,7 +315,7 @@ def compute_advantage(
         data.batch["returns"] = returns
     return data
 
-
+#prm_reward改进版
 class RayPPOTrainer:
     """Distributed PPO trainer using Ray for scalable reinforcement learning.
 
@@ -879,11 +879,11 @@ class RayPPOTrainer:
         else:
             raise NotImplementedError
 
-        # create critic
-        if self.use_critic:
-            resource_pool = self.resource_pool_manager.get_resource_pool(Role.Critic)
-            critic_cls = RayClassWithInitArgs(cls=self.role_worker_mapping[Role.Critic], config=self.config.critic)
-            self.resource_pool_to_cls[resource_pool]["critic"] = critic_cls
+        # # create critic
+        # if self.use_critic:
+        #     resource_pool = self.resource_pool_manager.get_resource_pool(Role.Critic)
+        #     critic_cls = RayClassWithInitArgs(cls=self.role_worker_mapping[Role.Critic], config=self.config.critic)
+        #     self.resource_pool_to_cls[resource_pool]["critic"] = critic_cls
 
         # create reference policy if needed
         if self.use_reference_policy:
@@ -1212,6 +1212,9 @@ class RayPPOTrainer:
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
 
+                    prm = gen_batch_output.batch['prm_reward']  # tx_add prm_reward
+                    batch.batch['token_level_scores'] = prm #tx_add 如果使用phi+prm_reward#################################
+
                     if "response_mask" not in batch.batch:
                         batch.batch["response_mask"] = compute_response_mask(batch)
                     # Balance the number of valid tokens across DP ranks.
@@ -1226,10 +1229,10 @@ class RayPPOTrainer:
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     with marked_timer("reward", timing_raw, color="yellow"):
-                        # compute reward model score
-                        if self.use_rm:
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor)
+                        # # compute reward model score
+                        # if self.use_rm:
+                        #     reward_tensor = self.rm_wg.compute_rm_score(batch)
+                        #     batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
@@ -1281,22 +1284,25 @@ class RayPPOTrainer:
                                 ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
 
-                    # compute values
-                    if self.use_critic:
-                        with marked_timer("values", timing_raw, color="cyan"):
-                            values = self.critic_wg.compute_values(batch)
-                            batch = batch.union(values)
+                    # # compute values
+                    # if self.use_critic:
+                    #     with marked_timer("values", timing_raw, color="cyan"):
+                    #         values = self.critic_wg.compute_values(batch)
+                    #         batch = batch.union(values)
 
                     with marked_timer("adv", timing_raw, color="brown"):
-                        # we combine with rule-based rm
-                        reward_extra_infos_dict: dict[str, list]
-                        if self.config.reward_model.launch_reward_fn_async:
-                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
-                        batch.batch["token_level_scores"] = reward_tensor
+                        # # we combine with rule-based rm
+                        # reward_extra_infos_dict: dict[str, list]
+                        # if self.config.reward_model.launch_reward_fn_async:
+                        #     reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
+                        # batch.batch["token_level_scores"] = reward_tensor
 
-                        if reward_extra_infos_dict:
-                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+                        # if reward_extra_infos_dict:
+                        #     batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
 
+                        token_level_scores = batch.batch['token_level_scores']
+                        batch.batch['token_level_scores'] = token_level_scores
+                        print(f"token_level_scores: {token_level_scores.shape}, {token_level_scores.dtype}")
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
                             batch, kl_metrics = apply_kl_penalty(
