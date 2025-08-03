@@ -511,7 +511,7 @@ class vLLMRollout(BaseRollout):
                         resp, add_special_tokens=False
                     )
                     #rep_adv = [raw_adv] * len(tok_ids)
-                    rep_adv = [raw_adv] + [0.0] * (len(tok_ids)-1)
+                    rep_adv =  [0.0] * (len(tok_ids)-1) + [raw_adv] # last token is the response token
 
                     new_weights[b][k_idx] = weights_history[b][origin] + rep_adv
                     new_steps[b][k_idx]   = prev_steps[b][origin] + resp + "\n"
@@ -561,7 +561,7 @@ class vLLMRollout(BaseRollout):
             full_texts.append(full)
             tok_ids = self.tokenizer.encode(gen, add_special_tokens=False)
             prob = final_raw_adv[i]
-            segment_reward = [prob] + [0.0] * (len(tok_ids) - 1)
+            segment_reward = [0.0] * (len(tok_ids) - 1) + [prob]
             #padded_ws.append(final_ws[i] + [final_raw_adv[i]] * len(tok_ids))
             padded_ws.append(final_ws[i] + segment_reward)
 
@@ -581,19 +581,19 @@ class vLLMRollout(BaseRollout):
         prm_reward = torch.tensor(pr_tensors, device=idx0.device)
 
         
-        # ####neu reward 这样计算导致reward过小
-        # # 按公式算权重：w_i = exp(-r_i/T) / sum_j exp(-r_j/T)
-        r = prm_reward
-        T = temperature 
-        exp_neg = torch.exp(-r / T)           # [Bn, L]
-        den = exp_neg.sum(dim=1, keepdim=True)  # [Bn, 1]
-        w = exp_neg / den                       # [Bn, L]
+        # # ####neu reward 这样计算导致reward过小, 有重复softmax的嫌疑
+        # # # 按公式算权重：w_i = exp(-r_i/T) / sum_j exp(-r_j/T)
+        # r = prm_reward
+        # T = temperature 
+        # exp_neg = torch.exp(-r / T)           # [Bn, L]
+        # den = exp_neg.sum(dim=1, keepdim=True)  # [Bn, 1]
+        # w = exp_neg / den                       # [Bn, L]
 
-        # 4) 最终 r*_i = w_i * r_i
-        r_star = w * r                          # [Bn, L]
+        # # 4) 最终 r*_i = w_i * r_i
+        # r_star = w * r                          # [Bn, L]
 
-        # 5) 用 r_star 作为 prm_reward
-        prm_reward = r_star
+        # # 5) 用 r_star 作为 prm_reward
+        # prm_reward = r_star
 
         # 10. Rebuild batch tensors
         Bn = resp_pad.size(0)
