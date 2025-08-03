@@ -262,6 +262,9 @@ def compute_advantage(
     elif adv_estimator == AdvantageEstimator.GRPO:
         # Initialize the mask for GRPO calculation
         grpo_calculation_mask = data.batch["response_mask"]
+        token_level_rewards = data.batch['token_level_rewards']
+        print(f"[DEBUG] token_level_rewards_in_grpo_adv shape = {token_level_rewards.shape}"
+              f" values = {token_level_rewards[0].detach().cpu().tolist()}")
         # Call compute_grpo_outcome_advantage with parameters matching its definition
         advantages, returns = core_algos.compute_grpo_outcome_advantage(
             token_level_rewards=data.batch["token_level_rewards"],
@@ -270,9 +273,11 @@ def compute_advantage(
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
         data.batch["advantages"] = advantages
+        print(f"[DEBUG] grpo_advantages[0] shape = {advantages[0].shape}, values = {advantages[0].detach().cpu().tolist()}")
         data.batch["returns"] = returns
     elif adv_estimator == AdvantageEstimator.INTUITOR:
         self_certaintys = data.batch["self_certaintys"]
+        print(f"[DEBUG] self_certaintys shape = {self_certaintys.shape}, values = {self_certaintys[0].detach().cpu().tolist()}")
         grpo_calculation_mask = data.batch["response_mask"]
         
         grpo_calculation_mask = grpo_calculation_mask.to(self_certaintys.dtype)
@@ -287,7 +292,8 @@ def compute_advantage(
         token_level_rewards.scatter_(
             -1, eos_mask_id.unsqueeze(-1), sentence_wise_mean.unsqueeze(-1)
         )
-
+        print(f"[DEBUG] token_level_rewards_in_intuitor_adv shape = {token_level_rewards.shape}"
+              f" values = {token_level_rewards[0].detach().cpu().tolist()}")
         advantages, returns = core_algos.compute_grpo_outcome_advantage(
             token_level_rewards=token_level_rewards,
             response_mask=grpo_calculation_mask,
@@ -295,6 +301,7 @@ def compute_advantage(
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
         data.batch["advantages"] = advantages
+        print(f"[DEBUG] intuitor_advantages[0] shape = {advantages[0].shape}, values = {advantages[0].detach().cpu().tolist()}")
         data.batch["returns"] = returns
     else:
         # handle all other adv estimator type other than GAE and GRPO
