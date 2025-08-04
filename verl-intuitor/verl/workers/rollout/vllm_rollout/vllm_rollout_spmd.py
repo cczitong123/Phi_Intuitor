@@ -581,19 +581,28 @@ class vLLMRollout(BaseRollout):
         prm_reward = torch.tensor(pr_tensors, device=idx0.device)
 
         
-        # # ####neu reward 这样计算导致reward过小, 有重复softmax的嫌疑
-        # # # 按公式算权重：w_i = exp(-r_i/T) / sum_j exp(-r_j/T)
-        # r = prm_reward
-        # T = temperature 
-        # exp_neg = torch.exp(-r / T)           # [Bn, L]
-        # den = exp_neg.sum(dim=1, keepdim=True)  # [Bn, 1]
-        # w = exp_neg / den                       # [Bn, L]
+        # ####neu reward r* use soft min
+        # # 按公式算权重：w_i = exp(-r_i/T) / sum_j exp(-r_j/T)
+        r = prm_reward
+        T = 0.1 # 越小，较小的 reward 越重要 
+        exp_neg = torch.exp(-r / T)           # [Bn, L]
+        den = exp_neg.sum(dim=1, keepdim=True)  # [Bn, 1]
+        w = exp_neg / den                       # [Bn, L]
 
-        # # 4) 最终 r*_i = w_i * r_i
-        # r_star = w * r                          # [Bn, L]
+        # 4) 最终 r*_i = w_i * r_i
+        r_star = w * r                          # [Bn, L]
 
-        # # 5) 用 r_star 作为 prm_reward
-        # prm_reward = r_star
+        # 5) 用 r_star 作为 prm_reward
+        #prm_reward = r_star
+
+        # 3) 反向累加得到 G_{i,t} = sum_{j=t}^{L-1} γ^{j-t} r*_{i,j}
+        discounted = torch.zeros_like(r_star)          # [Bn, L]
+        # 从最后一个位置开始
+        discounted[:, -1] = r_star[:, -1]
+        gamma= 1.0  # 折扣因子
+        for t in range(L-2, -1, -1):
+            discounted[:, t] = r_star[:, t] + gamma * discounted[:, t+1]
+
 
         # 10. Rebuild batch tensors
         Bn = resp_pad.size(0)
@@ -607,6 +616,21 @@ class vLLMRollout(BaseRollout):
         pos   = torch.cat([pos, last + delta], dim=1)
         attn  = get_response_mask(resp_pad, prompts.meta_info["eos_token_id"], mask.dtype)
         mask  = torch.cat([mask, attn], dim=1)
+
+        # 4) 只在“最后一个有效 token”上放 G_{i,0}
+        #    假设当前 batch 的 attention mask 保存在 mask 里，和 resp_pad 对齐
+        #    mask[b, t]==1 表示 resp_pad[b, t] 是有效 token
+        Bn, Lr = resp_pad.shape
+        # 计算每条序列的有效长度
+        lengths   = mask.sum(dim=1).to(torch.long)   # [Bn]
+        # 最后一个有效 token 的下标 = length-1
+        last_idxs = lengths - 1                      # [Bn]
+
+        # 构造新的 prm_reward，只在 last_idxs 上写入
+        prm_reward = torch.zeros_like(r_star)        # [Bn, Lr]
+        batch_idx  = torch.arange(Bn, device=r_star.device)
+        # discounted[:, 0] 是从 t=0 开始的总折扣回报
+        prm_reward[batch_idx, last_idxs] = discounted[:, 0]
 
         batch = TensorDict({
             "prompts":        idx,
