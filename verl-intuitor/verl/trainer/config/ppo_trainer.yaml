@@ -112,7 +112,7 @@ actor_rollout_ref:
     # Phi-Decoding 参数
     step_response_length: 512 # for Phi-Decoding, the length of each step response
     step_beam_size: 4 
-    num_foresight: 4
+    num_foresight: 4 #比较稳定, 比8好
     num_rollout: 4 
     width_pruning_strategy: low_sigma
     depth_pruning_strategy: cluster
@@ -121,6 +121,7 @@ actor_rollout_ref:
     least_foresight_num: 4
     sigma_rate: 1.0
     seed: 42
+    mix_lambda: 0.7  # Mix lambda for Phi
 
 # custom reward function definition
 custom_reward_function:
@@ -306,7 +307,7 @@ trainer:
   del_local_ckpt_after_load: False
 
   # Default local directory for saving checkpoints
-  default_local_dir: /hkfs/work/workspace/scratch/hgf_sap9939-myspace/checkpoints/${trainer.project_name}/${trainer.experiment_name}
+  default_local_dir: /home/vault/b273dd/b273dd15/checkpoints/${trainer.project_name}/${trainer.experiment_name}
 
   # Maximum number of actor checkpoints to keep
   max_actor_ckpt_to_keep: null
